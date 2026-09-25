@@ -4,10 +4,19 @@
 // No Mock Data Dependencies (Fully Connected to Express / PostgreSQL Backend)
 // ============================================================================
 
-// Base API URL: Automatically detects port 5000 or defaults to http://localhost:5000/api
-const API_BASE = (window.location.hostname === 'localhost' && window.location.port === '5000')
-  ? '/api'
-  : 'http://localhost:5000/api';
+// Base API URL: Defaults to relative /api (for production & Express portal on port 5000),
+// but automatically adapts to http://localhost:5000/api if opened via Live Server (e.g. port 5500) or file://.
+let API_BASE = (() => {
+  if (typeof window !== 'undefined') {
+    const isFile = window.location.protocol === 'file:';
+    const isOtherLocalPort = window.location.port && window.location.port !== '5000' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    if (isFile || isOtherLocalPort) {
+      return 'http://localhost:5000/api';
+    }
+  }
+  return '/api';
+})();
 
 // Default user credentials for instant role-switching and JWT authorization
 const ROLE_CREDENTIALS = {
@@ -84,9 +93,16 @@ let cachedUsers = [];
 // Core API Request Wrapper (Native async/await fetch with JWT injection)
 // ============================================================================
 async function apiFetch(endpoint, options = {}) {
-  const url = endpoint.startsWith('http')
-    ? endpoint
-    : `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+  // Remove domain prefix if endpoint is hardcoded to a local server (e.g., http://localhost:5000 or http://localhost:10000)
+  const cleanEndpoint = typeof endpoint === 'string'
+    ? endpoint.replace(/^https?:\/\/localhost(:\d+)?/i, '')
+    : endpoint;
+
+  const url = cleanEndpoint.startsWith('http')
+    ? cleanEndpoint
+    : (cleanEndpoint.startsWith('/api')
+      ? (API_BASE.startsWith('http') ? `${API_BASE.replace(/\/api$/, '')}${cleanEndpoint}` : cleanEndpoint)
+      : `${API_BASE}${cleanEndpoint.startsWith('/') ? '' : '/'}${cleanEndpoint}`);
 
   const headers = {
     'Content-Type': 'application/json',
@@ -139,8 +155,33 @@ async function checkApiStatus() {
   if (!badge) return;
 
   try {
-    const res = await fetch(`${API_BASE}/health`);
-    if (res.ok) {
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/health`);
+      // If relative /api returned non-ok on a local dev host (e.g. Live Server on port 5500), try fallback to backend port 5000
+      if (!res.ok && API_BASE === '/api' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+        const fallbackRes = await fetch('http://localhost:5000/api/health');
+        if (fallbackRes.ok) {
+          res = fallbackRes;
+          API_BASE = 'http://localhost:5000/api';
+        }
+      }
+    } catch (netErr) {
+      // If network request failed (e.g., file:// or port 5500), try fallback to port 5000
+      if (API_BASE === '/api' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:')) {
+        const fallbackRes = await fetch('http://localhost:5000/api/health');
+        if (fallbackRes.ok) {
+          res = fallbackRes;
+          API_BASE = 'http://localhost:5000/api';
+        } else {
+          throw netErr;
+        }
+      } else {
+        throw netErr;
+      }
+    }
+
+    if (res && res.ok) {
       const data = await res.json();
       badge.className = 'badge badge-valid';
       badge.innerHTML = '<i data-lucide="zap"></i> REST API Live (PostgreSQL)';
