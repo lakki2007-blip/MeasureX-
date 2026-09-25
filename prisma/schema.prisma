@@ -1,0 +1,137 @@
+// MeasureX! - Legal Metrology Online Verification Portal
+// Prisma Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+ 
+}
+
+// User Roles for Role-Based Access Control (RBAC)
+enum UserRole {
+  trader
+  inspector
+  admin
+}
+
+// Instrument Categories per Legal Metrology Schedule
+enum InstrumentCategory {
+  weighbridge
+  electronic_counter_scale
+  epos_scale
+  fuel_dispenser
+  precision_balance
+  flowmeter
+}
+
+// Instrument Verification Status
+enum InstrumentStatus {
+  valid
+  expiring
+  expired
+  pending_verification
+}
+
+// Verification Request Status
+enum RequestStatus {
+  pending
+  assigned
+  completed
+  rejected
+}
+
+// 1. Users Table
+model User {
+  id            String   @id @default(uuid())
+  name          String
+  entity        String
+  role          UserRole @default(trader)
+  email         String   @unique
+  password_hash String
+  phone         String?
+  license_no    String?  // Trade License No or Inspector Badge ID
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now())  @updatedAt
+
+  // Relationships
+  instruments         Instrument[]
+  trader_requests     VerificationRequest[] @relation("TraderRequests")
+  inspector_requests  VerificationRequest[] @relation("InspectorRequests")
+  issued_certificates Certificate[]         @relation("IssuedCertificates")
+
+  @@map("users")
+}
+
+// 2. Instruments Table
+model Instrument {
+  id                    String             @id @default(uuid())
+  category              InstrumentCategory
+  serial_number         String             @unique
+  location              String
+  owner_id              String
+  status                InstrumentStatus   @default(valid)
+  make_model            String?
+  max_capacity          String?
+  min_capacity          String?
+  accuracy_class        String?
+  last_verification_date DateTime?
+  next_due_date         DateTime?
+  seal_no               String?
+  created_at            DateTime           @default(now())
+  updated_at            DateTime @default(now()) @updatedAt
+
+  // Relationships
+  owner                 User                  @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+  verification_requests VerificationRequest[]
+  certificates          Certificate[]
+
+  @@map("instruments")
+}
+
+// 3. Verification Requests Table
+model VerificationRequest {
+  id             String        @id @default(uuid())
+  instrument_id  String
+  trader_id      String
+  inspector_id   String?
+  preferred_date DateTime
+  fee_amount     Decimal       @db.Decimal(10, 2)
+  status         RequestStatus @default(pending)
+  notes          String?
+  created_at     DateTime      @default(now())
+  updated_at     DateTime @default(now()) @updatedAt
+
+  // Relationships
+  instrument     Instrument   @relation(fields: [instrument_id], references: [id], onDelete: Cascade)
+  trader         User         @relation("TraderRequests", fields: [trader_id], references: [id], onDelete: Cascade)
+  inspector      User?        @relation("InspectorRequests", fields: [inspector_id], references: [id], onDelete: SetNull)
+  certificate    Certificate?
+
+  @@map("verification_requests")
+}
+
+// 4. Certificates Table
+model Certificate {
+  id                     String   @id @default(uuid())
+  instrument_id          String
+  request_id             String   @unique
+  issue_date             DateTime @default(now())
+  valid_till             DateTime
+  issued_by              String
+  seal_no                String
+  qr_code                String   @unique
+  result                 String   @default("PASSED")
+  max_permissible_error  String?
+  observed_error         String?
+  created_at             DateTime @default(now())
+
+  // Relationships
+  instrument             Instrument          @relation(fields: [instrument_id], references: [id], onDelete: Cascade)
+  request                VerificationRequest @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  inspector              User                @relation("IssuedCertificates", fields: [issued_by], references: [id], onDelete: Restrict)
+
+  @@map("certificates")
+}
